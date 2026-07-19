@@ -81,6 +81,26 @@ the **organization** at reconcile time.
   `//secretmanager.googleapis.com/projects/{project}/secrets/{name}`
 - **Auth:** Workload Identity (no keys)
 
+## Installation
+
+The Helm chart lives in `dist/chart`. Both GCP values are required:
+
+```sh
+helm install gsm-tag-controller dist/chart \
+  --namespace gsm-tag-controller-system --create-namespace \
+  --set gcp.organizationID=123456789 \
+  --set gcp.projectID=my-project
+```
+
+For GKE Workload Identity, annotate the chart's ServiceAccount with the GCP
+service account that holds tag binding permissions:
+
+```yaml
+serviceAccount:
+  annotations:
+    iam.gke.io/gcp-service-account: gsm-tag-controller@my-project.iam.gserviceaccount.com
+```
+
 ### Known limitations (accepted)
 
 - Single GCP project per controller deployment (project comes from Helm

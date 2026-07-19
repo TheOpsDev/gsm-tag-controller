@@ -1,0 +1,46 @@
+apiVersion: rbac.authorization.k8s.io/v1
+{{- if .Values.rbac.namespaced }}
+kind: Role
+{{- else }}
+kind: ClusterRole
+{{- end }}
+metadata:
+{{- if .Values.rbac.namespaced }}
+  namespace: {{ .Release.Namespace }}
+{{- end }}
+  name: {{ include "gsm-tag-controller.resourceName" (dict "suffix" "manager-role" "context" $) }}
+rules:
+- apiGroups:
+  - external-secrets.io
+  resources:
+  - pushsecrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gsm-tag-controller.io
+  resources:
+  - gsmsecrettags
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - gsm-tag-controller.io
+  resources:
+  - gsmsecrettags/finalizers
+  verbs:
+  - update
+- apiGroups:
+  - gsm-tag-controller.io
+  resources:
+  - gsmsecrettags/status
+  verbs:
+  - get
+  - patch
+  - update
