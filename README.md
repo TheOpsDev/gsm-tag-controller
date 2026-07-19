@@ -107,3 +107,44 @@ serviceAccount:
   values, not resolved per-SecretStore)
 - Tag keys/values must pre-exist in GCP — the controller only binds, never
   creates
+
+## End-to-end verification
+
+The full pipeline has been verified against a kind cluster with ESO
+installed (2026-07-19). Without GCP credentials the controller cannot
+complete a real tag binding, so a syntactically valid but unsigned service
+account key was mounted: the controller executes its real GCP code path and
+requests reach the Resource Manager API, which rejects them at
+authentication — exercising the designed failure surface.
+
+Setup:
+
+1. `kind create cluster`, install ESO from `charts.external-secrets.io`
+2. `docker build` the controller image, `kind load` it, install `dist/chart`
+   with `gcp.organizationID`/`gcp.projectID` set
+3. Create a `SecretStore` using ESO's `fake` provider, a source `Secret`,
+   and a `PushSecret` annotated with `gsm-tag-controller.io/tags`
+
+Verified behaviors:
+
+- **Creation** — once the `PushSecret` went Ready, the controller created a
+  `GSMSecretTag` with tags parsed from the annotation (whitespace trimmed),
+  `secretTarget` taken from the RemoteKey, `deletionPolicy` defaulted to
+  `Retain`, and a controller ownerReference
+- **Error surfacing** — status showed `Ready: False / SyncFailed` carrying
+  the actual GCP API error (`Unauthenticated`), confirming tag resolution
+  runs against the real Resource Manager API
+- **Requeue with backoff** — repeated retries logged while the GCP error
+  persisted
+- **Annotation updates** — editing the annotation propagated to `spec.tags`
+  within seconds
+- **Garbage collection** — deleting the `PushSecret` removed the
+  `GSMSecretTag` via ownerReference; the `Retain` finalizer path released
+  without GCP calls
+- **`deletionPolicy: Delete`** — deletion was correctly held by the
+  finalizer while GCP cleanup could not succeed, and released as soon as the
+  policy was patched to `Retain`
+
+Not yet exercised: a successful tag binding, which needs real credentials
+(Workload Identity in-cluster, or local ADC with `make run`) plus
+pre-existing tag keys/values under a real organization.
