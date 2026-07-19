@@ -192,10 +192,23 @@ func main() {
 		os.Exit(1)
 	}
 
+	ctx := ctrl.SetupSignalHandler()
+
+	tagBinder, err := gcp.NewClient(ctx, gcpOrganizationID, gcpProjectID)
+	if err != nil {
+		setupLog.Error(err, "Failed to create GCP tag client")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := tagBinder.Close(); err != nil {
+			setupLog.Error(err, "Failed to close GCP tag client")
+		}
+	}()
+
 	if err := (&controller.GSMSecretTagReconciler{
 		Client: mgr.GetClient(),
 		Scheme: mgr.GetScheme(),
-		Tags:   gcp.NewClient(gcpOrganizationID, gcpProjectID),
+		Tags:   tagBinder,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "Failed to create controller", "controller", "gsmsecrettag")
 		os.Exit(1)
@@ -219,7 +232,7 @@ func main() {
 	}
 
 	setupLog.Info("Starting manager")
-	if err := mgr.Start(ctrl.SetupSignalHandler()); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		setupLog.Error(err, "Failed to run manager")
 		os.Exit(1)
 	}

@@ -20,6 +20,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+
+	resourcemanager "cloud.google.com/go/resourcemanager/apiv3"
+	"cloud.google.com/go/resourcemanager/apiv3/resourcemanagerpb"
+	"google.golang.org/api/iterator"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // ErrTagNotFound indicates a tag key or value short name does not exist under
@@ -31,53 +38,198 @@ var ErrTagNotFound = errors.New("tag key or value not found in GCP organization"
 // TagBinder reconciles Resource Manager tag bindings on GSM secrets.
 type TagBinder interface {
 	// SyncTags performs a full sync of tag bindings on the named secret:
-	// bindings are added for entries in desired, and bindings previously
-	// managed by the controller but absent from desired are removed.
-	// It returns the tags bound after the sync.
+	// bindings are added for entries in desired, and org-scoped bindings
+	// absent from desired are removed. It returns the tags bound after the
+	// sync.
 	SyncTags(ctx context.Context, secretName string, desired map[string]string) (map[string]string, error)
 
-	// RemoveTags removes all controller-managed tag bindings from the named
-	// secret. Used when a GSMSecretTag with deletionPolicy Delete is deleted.
+	// RemoveTags removes all org-scoped tag bindings from the named secret.
+	// Used when a GSMSecretTag with deletionPolicy Delete is deleted.
 	RemoveTags(ctx context.Context, secretName string) error
 }
 
 // Client implements TagBinder against the GCP Resource Manager API using
-// Workload Identity credentials from the environment.
+// Application Default Credentials (Workload Identity in-cluster).
+//
+// Only bindings whose tag keys live under the configured organization are
+// managed; bindings from other parents (e.g. project-scoped tag keys) are
+// left untouched.
 type Client struct {
-	// OrganizationID is the numeric GCP organization ID under which tag key
-	// and value short names are resolved (organizations/{id}).
-	OrganizationID string
-	// ProjectID is the GCP project holding the GSM secrets, used to build
-	// the full resource name for tag bindings:
-	// //secretmanager.googleapis.com/projects/{project}/secrets/{name}.
-	ProjectID string
+	organizationID string
+	projectID      string
+	tagValues      *resourcemanager.TagValuesClient
+	tagBindings    *resourcemanager.TagBindingsClient
 }
 
 // NewClient returns a TagBinder scoped to the given organization and project.
-func NewClient(organizationID, projectID string) *Client {
-	return &Client{OrganizationID: organizationID, ProjectID: projectID}
+func NewClient(ctx context.Context, organizationID, projectID string) (*Client, error) {
+	tagValues, err := resourcemanager.NewTagValuesClient(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("creating tag values client: %w", err)
+	}
+	tagBindings, err := resourcemanager.NewTagBindingsClient(ctx)
+	if err != nil {
+		tagValues.Close()
+		return nil, fmt.Errorf("creating tag bindings client: %w", err)
+	}
+	return &Client{
+		organizationID: organizationID,
+		projectID:      projectID,
+		tagValues:      tagValues,
+		tagBindings:    tagBindings,
+	}, nil
+}
+
+// Close releases the underlying API connections.
+func (c *Client) Close() error {
+	return errors.Join(c.tagValues.Close(), c.tagBindings.Close())
 }
 
 // secretResourceName builds the full resource name required by the tag
 // bindings API.
 func (c *Client) secretResourceName(secretName string) string {
-	return fmt.Sprintf("//secretmanager.googleapis.com/projects/%s/secrets/%s", c.ProjectID, secretName)
+	return fmt.Sprintf("//secretmanager.googleapis.com/projects/%s/secrets/%s", c.projectID, secretName)
 }
 
 func (c *Client) SyncTags(ctx context.Context, secretName string, desired map[string]string) (map[string]string, error) {
-	// TODO: implement using cloud.google.com/go/resourcemanager/apiv3:
-	//   1. Resolve each short name in desired to tagKeys/{id}/tagValues/{id}
-	//      under organizations/{c.OrganizationID}; return ErrTagNotFound if
-	//      a key or value does not exist.
-	//   2. List existing tag bindings on c.secretResourceName(secretName).
-	//   3. Create bindings missing from GCP, delete bindings absent from
-	//      desired (full sync).
-	_ = c.secretResourceName(secretName)
-	return nil, errors.New("not implemented")
+	// Resolve every desired short-name pair to its tagValues/{id} resource
+	// name up front, so a missing tag fails the sync before any mutation.
+	desiredValueIDs := make(map[string]string, len(desired))
+	for key, value := range desired {
+		id, err := c.resolveTagValue(ctx, key, value)
+		if err != nil {
+			return nil, err
+		}
+		desiredValueIDs[key] = id
+	}
+
+	parent := c.secretResourceName(secretName)
+	existing, err := c.listBindings(ctx, parent)
+	if err != nil {
+		return nil, err
+	}
+
+	// Full sync: remove org-scoped bindings not in desired first, since a
+	// resource can hold only one value per tag key.
+	for _, binding := range existing {
+		key, value, ok := c.parseNamespacedValue(binding.TagValueNamespacedName)
+		if !ok {
+			continue
+		}
+		if want, found := desired[key]; found && want == value {
+			continue
+		}
+		if err := c.deleteBinding(ctx, binding.Name); err != nil {
+			return nil, fmt.Errorf("removing binding %s=%s from %s: %w", key, value, secretName, err)
+		}
+	}
+
+	bound := currentTags(existing, c.organizationID)
+	for key, value := range desired {
+		if bound[key] == value {
+			continue
+		}
+		op, err := c.tagBindings.CreateTagBinding(ctx, &resourcemanagerpb.CreateTagBindingRequest{
+			TagBinding: &resourcemanagerpb.TagBinding{
+				Parent:   parent,
+				TagValue: desiredValueIDs[key],
+			},
+		})
+		if err != nil {
+			return nil, fmt.Errorf("binding %s=%s to %s: %w", key, value, secretName, err)
+		}
+		if _, err := op.Wait(ctx); err != nil {
+			return nil, fmt.Errorf("binding %s=%s to %s: %w", key, value, secretName, err)
+		}
+	}
+
+	result := make(map[string]string, len(desired))
+	for key, value := range desired {
+		result[key] = value
+	}
+	return result, nil
 }
 
 func (c *Client) RemoveTags(ctx context.Context, secretName string) error {
-	// TODO: list and delete all tag bindings on
-	// c.secretResourceName(secretName).
-	return errors.New("not implemented")
+	existing, err := c.listBindings(ctx, c.secretResourceName(secretName))
+	if err != nil {
+		return err
+	}
+	for _, binding := range existing {
+		key, value, ok := c.parseNamespacedValue(binding.TagValueNamespacedName)
+		if !ok {
+			continue
+		}
+		if err := c.deleteBinding(ctx, binding.Name); err != nil {
+			return fmt.Errorf("removing binding %s=%s from %s: %w", key, value, secretName, err)
+		}
+	}
+	return nil
+}
+
+// resolveTagValue looks up the tagValues/{id} resource name for a short-name
+// pair under the organization.
+func (c *Client) resolveTagValue(ctx context.Context, key, value string) (string, error) {
+	tv, err := c.tagValues.GetNamespacedTagValue(ctx, &resourcemanagerpb.GetNamespacedTagValueRequest{
+		Name: fmt.Sprintf("%s/%s/%s", c.organizationID, key, value),
+	})
+	if status.Code(err) == codes.NotFound || status.Code(err) == codes.PermissionDenied {
+		// The API returns PermissionDenied for nonexistent tags to avoid
+		// leaking their existence; treat both as not found.
+		return "", fmt.Errorf("tag %s=%s under organization %s: %w", key, value, c.organizationID, ErrTagNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolving tag %s=%s: %w", key, value, err)
+	}
+	return tv.GetName(), nil
+}
+
+func (c *Client) listBindings(ctx context.Context, parent string) ([]*resourcemanagerpb.TagBinding, error) {
+	var bindings []*resourcemanagerpb.TagBinding
+	it := c.tagBindings.ListTagBindings(ctx, &resourcemanagerpb.ListTagBindingsRequest{Parent: parent})
+	for {
+		binding, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			return bindings, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing tag bindings on %s: %w", parent, err)
+		}
+		bindings = append(bindings, binding)
+	}
+}
+
+func (c *Client) deleteBinding(ctx context.Context, name string) error {
+	op, err := c.tagBindings.DeleteTagBinding(ctx, &resourcemanagerpb.DeleteTagBindingRequest{Name: name})
+	if err != nil {
+		return err
+	}
+	return op.Wait(ctx)
+}
+
+// parseNamespacedValue splits an org-scoped namespaced tag value name
+// ("{orgId}/{key}/{value}") into its key and value short names. It reports
+// false for bindings outside the configured organization, which this
+// controller does not manage.
+func (c *Client) parseNamespacedValue(namespacedName string) (key, value string, ok bool) {
+	return parseNamespacedValue(namespacedName, c.organizationID)
+}
+
+func parseNamespacedValue(namespacedName, organizationID string) (key, value string, ok bool) {
+	parts := strings.Split(namespacedName, "/")
+	if len(parts) != 3 || parts[0] != organizationID {
+		return "", "", false
+	}
+	return parts[1], parts[2], true
+}
+
+// currentTags maps the org-scoped bindings to key/value short names.
+func currentTags(bindings []*resourcemanagerpb.TagBinding, organizationID string) map[string]string {
+	tags := make(map[string]string, len(bindings))
+	for _, binding := range bindings {
+		if key, value, ok := parseNamespacedValue(binding.TagValueNamespacedName, organizationID); ok {
+			tags[key] = value
+		}
+	}
+	return tags
 }
