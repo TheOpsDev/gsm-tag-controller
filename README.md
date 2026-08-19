@@ -84,6 +84,19 @@ the configured **tag parent** (an organization or project) at reconcile time.
 
 ## Installation
 
+### Prerequisites
+
+- A Kubernetes cluster with [External Secrets Operator](https://external-secrets.io)
+  installed (the controller watches ESO's `PushSecret` CRD)
+- Resource Manager tag keys/values already created in GCP under the tag
+  parent — the controller only binds existing tags, it never creates them
+- A GCP service account with permission to view tag keys/values and manage
+  tag bindings on the target secrets (e.g. `roles/resourcemanager.tagUser`),
+  exposed to the controller via Workload Identity or Application Default
+  Credentials
+
+### Helm
+
 The Helm chart lives in `dist/chart`. `gcp.projectID` is required;
 `gcp.tagParent` is optional and defaults to the project ID:
 
@@ -150,3 +163,20 @@ Verified behaviors:
 Not yet exercised: a successful tag binding, which needs real credentials
 (Workload Identity in-cluster, or local ADC with `make run`) plus
 pre-existing tag keys/values under a real tag parent.
+
+## Development
+
+Common targets:
+
+```sh
+make test        # unit tests (envtest)
+make test-e2e    # e2e suite against a kind cluster
+make lint        # golangci-lint (builds a custom binary with logcheck)
+make run         # run the manager locally against the current kubeconfig
+```
+
+Issues and pull requests are welcome.
+
+## License
+
+Apache License 2.0 — see [LICENSE](LICENSE).
