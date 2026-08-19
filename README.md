@@ -52,7 +52,7 @@ annotations:
 ```
 
 Values are **short names**, resolved to `tagKeys/{id}` / `tagValues/{id}` under
-the **organization** at reconcile time.
+the configured **tag parent** (an organization or project) at reconcile time.
 
 ### Reconcile flow
 
@@ -76,20 +76,22 @@ the **organization** at reconcile time.
 
 ### Configuration (Helm values)
 
-- **GCP org ID** — parent for tag key/value resolution (`organizations/{id}`)
+- **GCP tag parent** — parent for tag key/value resolution: a numeric
+  organization ID or a project ID; defaults to the project ID
 - **GCP project ID** — used to build the secret's full resource name:
   `//secretmanager.googleapis.com/projects/{project}/secrets/{name}`
 - **Auth:** Workload Identity (no keys)
 
 ## Installation
 
-The Helm chart lives in `dist/chart`. Both GCP values are required:
+The Helm chart lives in `dist/chart`. `gcp.projectID` is required;
+`gcp.tagParent` is optional and defaults to the project ID:
 
 ```sh
 helm install gsm-tag-controller dist/chart \
   --namespace gsm-tag-controller-system --create-namespace \
-  --set gcp.organizationID=123456789 \
-  --set gcp.projectID=my-project
+  --set gcp.projectID=my-project \
+  --set gcp.tagParent=123456789
 ```
 
 For GKE Workload Identity, annotate the chart's ServiceAccount with the GCP
@@ -121,7 +123,7 @@ Setup:
 
 1. `kind create cluster`, install ESO from `charts.external-secrets.io`
 2. `docker build` the controller image, `kind load` it, install `dist/chart`
-   with `gcp.organizationID`/`gcp.projectID` set
+   with `gcp.projectID` (and optionally `gcp.tagParent`) set
 3. Create a `SecretStore` using ESO's `fake` provider, a source `Secret`,
    and a `PushSecret` annotated with `gsm-tag-controller.io/tags`
 
@@ -147,4 +149,4 @@ Verified behaviors:
 
 Not yet exercised: a successful tag binding, which needs real credentials
 (Workload Identity in-cluster, or local ADC with `make run`) plus
-pre-existing tag keys/values under a real organization.
+pre-existing tag keys/values under a real tag parent.

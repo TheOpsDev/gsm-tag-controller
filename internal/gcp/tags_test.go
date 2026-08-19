@@ -27,15 +27,23 @@ func TestParseNamespacedValue(t *testing.T) {
 	tests := []struct {
 		name           string
 		namespacedName string
-		orgID          string
+		tagParent      string
 		wantKey        string
 		wantValue      string
 		wantOK         bool
 	}{
 		{
-			name:           "org-scoped binding",
+			name:           "org-parented binding",
 			namespacedName: "123456789/environment/prod",
-			orgID:          "123456789",
+			tagParent:      "123456789",
+			wantKey:        "environment",
+			wantValue:      "prod",
+			wantOK:         true,
+		},
+		{
+			name:           "project-parented binding",
+			namespacedName: "my-project/environment/prod",
+			tagParent:      "my-project",
 			wantKey:        "environment",
 			wantValue:      "prod",
 			wantOK:         true,
@@ -43,35 +51,35 @@ func TestParseNamespacedValue(t *testing.T) {
 		{
 			name:           "different organization",
 			namespacedName: "987654321/environment/prod",
-			orgID:          "123456789",
+			tagParent:      "123456789",
 			wantOK:         false,
 		},
 		{
-			name:           "project-scoped binding",
+			name:           "project-parented binding outside configured parent",
 			namespacedName: "my-project/environment/prod",
-			orgID:          "123456789",
+			tagParent:      "123456789",
 			wantOK:         false,
 		},
 		{
 			name:           "malformed name",
 			namespacedName: "environment/prod",
-			orgID:          "123456789",
+			tagParent:      "123456789",
 			wantOK:         false,
 		},
 		{
 			name:           "empty name",
 			namespacedName: "",
-			orgID:          "123456789",
+			tagParent:      "123456789",
 			wantOK:         false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			key, value, ok := parseNamespacedValue(tt.namespacedName, tt.orgID)
+			key, value, ok := parseNamespacedValue(tt.namespacedName, tt.tagParent)
 			if ok != tt.wantOK || key != tt.wantKey || value != tt.wantValue {
 				t.Errorf("parseNamespacedValue(%q, %q) = (%q, %q, %v), want (%q, %q, %v)",
-					tt.namespacedName, tt.orgID, key, value, ok, tt.wantKey, tt.wantValue, tt.wantOK)
+					tt.namespacedName, tt.tagParent, key, value, ok, tt.wantKey, tt.wantValue, tt.wantOK)
 			}
 		})
 	}

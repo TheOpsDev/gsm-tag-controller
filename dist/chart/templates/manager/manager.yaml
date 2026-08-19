@@ -84,7 +84,7 @@ spec:
         - --metrics-bind-address=0
         {{- end }}
         - --health-probe-bind-address=:8081
-        - --gcp-organization-id={{ required "gcp.organizationID is required" .Values.gcp.organizationID }}
+        - --gcp-tag-parent={{ .Values.gcp.tagParent | default .Values.gcp.projectID }}
         - --gcp-project-id={{ required "gcp.projectID is required" .Values.gcp.projectID }}
         {{- range .Values.manager.args }}
         - {{ . }}

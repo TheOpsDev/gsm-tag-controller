@@ -30,53 +30,53 @@ import (
 )
 
 // ErrTagNotFound indicates a tag key or value short name does not exist under
-// the configured organization. The controller only binds pre-existing tags;
+// the configured tag parent. The controller only binds pre-existing tags;
 // it surfaces this in status and keeps requeuing, since tags can be created
 // in GCP out-of-band.
-var ErrTagNotFound = errors.New("tag key or value not found in GCP organization")
+var ErrTagNotFound = errors.New("tag key or value not found under the configured GCP tag parent")
 
 // TagBinder reconciles Resource Manager tag bindings on GSM secrets.
 type TagBinder interface {
 	// SyncTags performs a full sync of tag bindings on the named secret:
-	// bindings are added for entries in desired, and org-scoped bindings
+	// bindings are added for entries in desired, and parent-scoped bindings
 	// absent from desired are removed. It returns the tags bound after the
 	// sync.
 	SyncTags(ctx context.Context, secretName string, desired map[string]string) (map[string]string, error)
 
-	// RemoveTags removes all org-scoped tag bindings from the named secret.
-	// Used when a GSMSecretTag with deletionPolicy Delete is deleted.
+	// RemoveTags removes all parent-scoped tag bindings from the named
+	// secret. Used when a GSMSecretTag with deletionPolicy Delete is deleted.
 	RemoveTags(ctx context.Context, secretName string) error
 }
 
 // Client implements TagBinder against the GCP Resource Manager API using
 // Application Default Credentials (Workload Identity in-cluster).
 //
-// Only bindings whose tag keys live under the configured organization are
-// managed; bindings from other parents (e.g. project-scoped tag keys) are
-// left untouched.
+// Only bindings whose tag keys live under the configured tag parent (a
+// numeric organization ID or a project ID) are managed; bindings from other
+// parents are left untouched.
 type Client struct {
-	organizationID string
-	projectID      string
-	tagValues      *resourcemanager.TagValuesClient
-	tagBindings    *resourcemanager.TagBindingsClient
+	tagParent   string
+	projectID   string
+	tagValues   *resourcemanager.TagValuesClient
+	tagBindings *resourcemanager.TagBindingsClient
 }
 
-// NewClient returns a TagBinder scoped to the given organization and project.
-func NewClient(ctx context.Context, organizationID, projectID string) (*Client, error) {
+// NewClient returns a TagBinder scoped to the given tag parent and project.
+func NewClient(ctx context.Context, tagParent, projectID string) (*Client, error) {
 	tagValues, err := resourcemanager.NewTagValuesClient(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("creating tag values client: %w", err)
 	}
 	tagBindings, err := resourcemanager.NewTagBindingsClient(ctx)
 	if err != nil {
-		tagValues.Close()
+		_ = tagValues.Close()
 		return nil, fmt.Errorf("creating tag bindings client: %w", err)
 	}
 	return &Client{
-		organizationID: organizationID,
-		projectID:      projectID,
-		tagValues:      tagValues,
-		tagBindings:    tagBindings,
+		tagParent:   tagParent,
+		projectID:   projectID,
+		tagValues:   tagValues,
+		tagBindings: tagBindings,
 	}, nil
 }
 
@@ -109,7 +109,7 @@ func (c *Client) SyncTags(ctx context.Context, secretName string, desired map[st
 		return nil, err
 	}
 
-	// Full sync: remove org-scoped bindings not in desired first, since a
+	// Full sync: remove parent-scoped bindings not in desired first, since a
 	// resource can hold only one value per tag key.
 	for _, binding := range existing {
 		key, value, ok := c.parseNamespacedValue(binding.TagValueNamespacedName)
@@ -124,7 +124,7 @@ func (c *Client) SyncTags(ctx context.Context, secretName string, desired map[st
 		}
 	}
 
-	bound := currentTags(existing, c.organizationID)
+	bound := currentTags(existing, c.tagParent)
 	for key, value := range desired {
 		if bound[key] == value {
 			continue
@@ -168,15 +168,15 @@ func (c *Client) RemoveTags(ctx context.Context, secretName string) error {
 }
 
 // resolveTagValue looks up the tagValues/{id} resource name for a short-name
-// pair under the organization.
+// pair under the tag parent.
 func (c *Client) resolveTagValue(ctx context.Context, key, value string) (string, error) {
 	tv, err := c.tagValues.GetNamespacedTagValue(ctx, &resourcemanagerpb.GetNamespacedTagValueRequest{
-		Name: fmt.Sprintf("%s/%s/%s", c.organizationID, key, value),
+		Name: fmt.Sprintf("%s/%s/%s", c.tagParent, key, value),
 	})
 	if status.Code(err) == codes.NotFound || status.Code(err) == codes.PermissionDenied {
 		// The API returns PermissionDenied for nonexistent tags to avoid
 		// leaking their existence; treat both as not found.
-		return "", fmt.Errorf("tag %s=%s under organization %s: %w", key, value, c.organizationID, ErrTagNotFound)
+		return "", fmt.Errorf("tag %s=%s under parent %s: %w", key, value, c.tagParent, ErrTagNotFound)
 	}
 	if err != nil {
 		return "", fmt.Errorf("resolving tag %s=%s: %w", key, value, err)
@@ -207,27 +207,27 @@ func (c *Client) deleteBinding(ctx context.Context, name string) error {
 	return op.Wait(ctx)
 }
 
-// parseNamespacedValue splits an org-scoped namespaced tag value name
-// ("{orgId}/{key}/{value}") into its key and value short names. It reports
-// false for bindings outside the configured organization, which this
+// parseNamespacedValue splits a namespaced tag value name
+// ("{parent}/{key}/{value}") into its key and value short names. It reports
+// false for bindings outside the configured tag parent, which this
 // controller does not manage.
 func (c *Client) parseNamespacedValue(namespacedName string) (key, value string, ok bool) {
-	return parseNamespacedValue(namespacedName, c.organizationID)
+	return parseNamespacedValue(namespacedName, c.tagParent)
 }
 
-func parseNamespacedValue(namespacedName, organizationID string) (key, value string, ok bool) {
+func parseNamespacedValue(namespacedName, tagParent string) (key, value string, ok bool) {
 	parts := strings.Split(namespacedName, "/")
-	if len(parts) != 3 || parts[0] != organizationID {
+	if len(parts) != 3 || parts[0] != tagParent {
 		return "", "", false
 	}
 	return parts[1], parts[2], true
 }
 
-// currentTags maps the org-scoped bindings to key/value short names.
-func currentTags(bindings []*resourcemanagerpb.TagBinding, organizationID string) map[string]string {
+// currentTags maps the parent-scoped bindings to key/value short names.
+func currentTags(bindings []*resourcemanagerpb.TagBinding, tagParent string) map[string]string {
 	tags := make(map[string]string, len(bindings))
 	for _, binding := range bindings {
-		if key, value, ok := parseNamespacedValue(binding.TagValueNamespacedName, organizationID); ok {
+		if key, value, ok := parseNamespacedValue(binding.TagValueNamespacedName, tagParent); ok {
 			tags[key] = value
 		}
 	}

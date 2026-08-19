@@ -9,10 +9,11 @@
 ## GCP configuration (required)
 ##
 gcp:
-  ## Numeric GCP organization ID under which Resource Manager tag keys
-  ## and values are resolved
+  ## Parent namespace (numeric GCP organization ID or project ID) under
+  ## which Resource Manager tag keys and values are resolved; defaults
+  ## to projectID
   ##
-  organizationID: ""
+  tagParent: ""
 
   ## GCP project ID holding the GSM secrets to tag
   ##
