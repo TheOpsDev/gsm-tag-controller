@@ -106,6 +106,16 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 lint-config: golangci-lint ## Verify golangci-lint linter configuration
 	"$(GOLANGCI_LINT)" config verify
 
+.PHONY: verify-generate
+verify-generate: manifests generate fmt ## Verify committed generated files and formatting are up to date (CI drift check).
+	@if [ -n "$$(git status --porcelain)" ]; then \
+		echo "Error: generated files or formatting are out of date."; \
+		echo "Run 'make manifests generate fmt' and commit the result:"; \
+		git status --porcelain; \
+		git --no-pager diff; \
+		exit 1; \
+	fi
+
 ##@ Build
 
 .PHONY: build
