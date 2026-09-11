@@ -69,9 +69,41 @@ jobs:
 #          helm repo update
 #          helm install prometheus-crds prometheus-community/prometheus-operator-crds
 
+      - name: Install external-secrets CRDs
+        # Pinned to the external-secrets commit referenced in go.mod; the
+        # manager watches PushSecret resources and exits if the CRD is absent.
+        run: |
+          kubectl apply --server-side -f https://raw.githubusercontent.com/external-secrets/external-secrets/fe392a2cb897/deploy/crds/bundle.yaml
+
+      - name: Create fake GCP credentials
+        # The manager resolves Application Default Credentials at startup.
+        # A syntactically valid credentials file is enough for the chart
+        # test; no GCP API calls are made without GSMSecretTag resources.
+        run: |
+          echo '{"type":"authorized_user","client_id":"fake.apps.googleusercontent.com","client_secret":"fake","refresh_token":"fake"}' > /tmp/fake-adc.json
+          kubectl create namespace gsm-tag-controller-system
+          kubectl --namespace gsm-tag-controller-system create secret generic fake-gcp-credentials \
+            --from-file=credentials.json=/tmp/fake-adc.json
+
       - name: Deploy manager via Helm
         run: |
-          make helm-deploy
+          cat > /tmp/ci-values.yaml <<'EOF'
+          gcp:
+            projectID: kind-ci-project
+          manager:
+            extraEnv:
+              - name: GOOGLE_APPLICATION_CREDENTIALS
+                value: /var/run/secrets/gcp/credentials.json
+            extraVolumes:
+              - name: gcp-credentials
+                secret:
+                  secretName: fake-gcp-credentials
+            extraVolumeMounts:
+              - name: gcp-credentials
+                mountPath: /var/run/secrets/gcp
+                readOnly: true
+          EOF
+          make helm-deploy HELM_EXTRA_ARGS="--values /tmp/ci-values.yaml"
 
       - name: Check Helm release status
         run: |

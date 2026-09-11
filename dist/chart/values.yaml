@@ -40,6 +40,20 @@ manager:
   args:
     - --leader-elect
 
+  ## Extra environment variables for the manager container, e.g. to point
+  ## GOOGLE_APPLICATION_CREDENTIALS at a mounted service account key when
+  ## not using GKE Workload Identity
+  ##
+  # extraEnv:
+  #   - name: GOOGLE_APPLICATION_CREDENTIALS
+  #     value: /var/run/secrets/gcp/credentials.json
+
+  ## Extra volumes and mounts for the manager pod, e.g. to mount a GCP
+  ## service account key
+  ##
+  # extraVolumes: []
+  # extraVolumeMounts: []
+
   ## Image pull secrets
   ##
   # imagePullSecrets:
