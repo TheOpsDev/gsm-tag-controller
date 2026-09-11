@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 
 	resourcemanager "cloud.google.com/go/resourcemanager/apiv3"
@@ -144,9 +145,7 @@ func (c *Client) SyncTags(ctx context.Context, secretName string, desired map[st
 	}
 
 	result := make(map[string]string, len(desired))
-	for key, value := range desired {
-		result[key] = value
-	}
+	maps.Copy(result, desired)
 	return result, nil
 }
 
