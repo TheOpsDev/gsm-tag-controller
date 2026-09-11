@@ -449,7 +449,7 @@ spec:
         - --leader-elect
         - --health-probe-bind-address=:8081
         command:
-        - /manager
+        - /app/bin/manager
         image: controller:latest
         livenessProbe:
           httpGet:

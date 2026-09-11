@@ -1,0 +1,44 @@
+# Overlay used by the e2e suite (test/e2e). The manager resolves GCP
+# Application Default Credentials at startup, so the deployment gets a
+# syntactically valid fake credentials file and a test project ID; no
+# GCP API calls are made by the e2e scenarios.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: gsm-tag-controller-system
+
+resources:
+  - ../default
+
+secretGenerator:
+  - name: fake-gcp-credentials
+    options:
+      disableNameSuffixHash: true
+    literals:
+      - 'credentials.json={"type":"authorized_user","client_id":"fake.apps.googleusercontent.com","client_secret":"fake","refresh_token":"fake"}'
+
+patches:
+  - target:
+      kind: Deployment
+      name: gsm-tag-controller-controller-manager
+    patch: |-
+      - op: add
+        path: /spec/template/spec/containers/0/args/-
+        value: --gcp-project-id=e2e-test-project
+      - op: add
+        path: /spec/template/spec/containers/0/env
+        value:
+          - name: GOOGLE_APPLICATION_CREDENTIALS
+            value: /var/run/secrets/gcp/credentials.json
+      - op: add
+        path: /spec/template/spec/containers/0/volumeMounts/-
+        value:
+          name: gcp-credentials
+          mountPath: /var/run/secrets/gcp
+          readOnly: true
+      - op: add
+        path: /spec/template/spec/volumes/-
+        value:
+          name: gcp-credentials
+          secret:
+            secretName: fake-gcp-credentials

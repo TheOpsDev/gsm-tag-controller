@@ -45,6 +45,11 @@ const metricsServiceName = "gsm-tag-controller-controller-manager-metrics-servic
 // metricsRoleBindingName is the name of the RBAC that will be created to allow get the metrics data
 const metricsRoleBindingName = "gsm-tag-controller-metrics-binding"
 
+// externalSecretsCRDBundle provides the PushSecret CRD the manager watches;
+// pinned to the external-secrets commit referenced in go.mod
+const externalSecretsCRDBundle = "https://raw.githubusercontent.com/external-secrets/external-secrets/" +
+	"fe392a2cb897/deploy/crds/bundle.yaml"
+
 var _ = Describe("Manager", Ordered, func() {
 	var controllerPodName string
 
@@ -68,8 +73,13 @@ var _ = Describe("Manager", Ordered, func() {
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to install CRDs")
 
+		By("installing external-secrets CRDs")
+		cmd = exec.Command("kubectl", "apply", "--server-side", "-f", externalSecretsCRDBundle)
+		_, err = utils.Run(cmd)
+		Expect(err).NotTo(HaveOccurred(), "Failed to install external-secrets CRDs")
+
 		By("deploying the controller-manager")
-		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage))
+		cmd = exec.Command("make", "deploy", fmt.Sprintf("IMG=%s", managerImage), "KUSTOMIZE_OVERLAY=config/e2e")
 		_, err = utils.Run(cmd)
 		Expect(err).NotTo(HaveOccurred(), "Failed to deploy the controller-manager")
 	})
@@ -82,7 +92,7 @@ var _ = Describe("Manager", Ordered, func() {
 		_, _ = utils.Run(cmd)
 
 		By("undeploying the controller-manager")
-		cmd = exec.Command("make", "undeploy")
+		cmd = exec.Command("make", "undeploy", "KUSTOMIZE_OVERLAY=config/e2e")
 		_, _ = utils.Run(cmd)
 
 		By("uninstalling CRDs")
