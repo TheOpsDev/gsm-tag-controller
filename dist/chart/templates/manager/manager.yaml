@@ -84,13 +84,17 @@ spec:
         - --metrics-bind-address=0
         {{- end }}
         - --health-probe-bind-address=:8081
-        - --gcp-organization-id={{ required "gcp.organizationID is required" .Values.gcp.organizationID }}
+        - --gcp-tag-parent={{ .Values.gcp.tagParent | default .Values.gcp.projectID }}
         - --gcp-project-id={{ required "gcp.projectID is required" .Values.gcp.projectID }}
         {{- range .Values.manager.args }}
         - {{ . }}
         {{- end }}
         command:
-        - /manager
+        - /app/bin/manager
+        {{- with .Values.manager.extraEnv }}
+        env:
+          {{- toYaml . | nindent 10 }}
+        {{- end }}
         image: "{{ .Values.manager.image.repository }}{{- if not (contains "@" .Values.manager.image.repository) }}:{{ .Values.manager.image.tag | default .Chart.AppVersion }}{{- end }}"
         {{- with .Values.manager.image.pullPolicy }}
         imagePullPolicy: {{ . }}

@@ -65,6 +65,7 @@ func main() {
 	var secureMetrics bool
 	var enableHTTP2 bool
 	var gcpOrganizationID string
+	var gcpTagParent string
 	var gcpProjectID string
 	var tlsOpts []func(*tls.Config)
 	flag.StringVar(&metricsAddr, "metrics-bind-address", "0", "The address the metrics endpoint binds to. "+
@@ -85,7 +86,10 @@ func main() {
 	flag.BoolVar(&enableHTTP2, "enable-http2", false,
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	flag.StringVar(&gcpOrganizationID, "gcp-organization-id", "",
-		"The numeric GCP organization ID under which Resource Manager tag keys and values are resolved.")
+		"Deprecated and ignored; use --gcp-tag-parent instead.")
+	flag.StringVar(&gcpTagParent, "gcp-tag-parent", "",
+		"The parent namespace (numeric GCP organization ID or project ID) under which Resource Manager "+
+			"tag keys and values are resolved. Defaults to the value of --gcp-project-id.")
 	flag.StringVar(&gcpProjectID, "gcp-project-id", "",
 		"The GCP project ID holding the GSM secrets to tag.")
 	opts := zap.Options{
@@ -187,14 +191,20 @@ func main() {
 		os.Exit(1)
 	}
 
-	if gcpOrganizationID == "" || gcpProjectID == "" {
-		setupLog.Error(nil, "Both --gcp-organization-id and --gcp-project-id are required")
+	if gcpProjectID == "" {
+		setupLog.Error(nil, "--gcp-project-id is required")
 		os.Exit(1)
+	}
+	if gcpOrganizationID != "" {
+		setupLog.Info("--gcp-organization-id is deprecated and ignored; use --gcp-tag-parent")
+	}
+	if gcpTagParent == "" {
+		gcpTagParent = gcpProjectID
 	}
 
 	ctx := ctrl.SetupSignalHandler()
 
-	tagBinder, err := gcp.NewClient(ctx, gcpOrganizationID, gcpProjectID)
+	tagBinder, err := gcp.NewClient(ctx, gcpTagParent, gcpProjectID)
 	if err != nil {
 		setupLog.Error(err, "Failed to create GCP tag client")
 		os.Exit(1)
